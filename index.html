@@ -369,6 +369,7 @@ select{font-family:var(--font);font-size:13.5px;padding:9px 11px;border:1px soli
 .hostlobby__count{font:500 14px var(--mono);color:var(--ink-soft);margin-top:2px}
 .hostlobby__count b{font:700 22px var(--mono);color:var(--nhs-dark)}
 .hostlobby #host-lobby-start{margin-top:10px}
+.monitor__resp{margin-top:8px;font:700 14px var(--mono);color:var(--nhs-dark);min-height:18px;letter-spacing:.02em}
 </style>
 </head>
 <body>
@@ -465,6 +466,7 @@ select{font-family:var(--font);font-size:13.5px;padding:9px 11px;border:1px soli
             <div class="ring__flat"></div>
           </div>
           <div class="monitor__sub" id="monitor-sub">Press Start to begin</div>
+          <div class="monitor__resp" id="host-responses"></div>
         </div>
 
         <div class="ctrls">
@@ -762,6 +764,7 @@ const Host={
     if($('btn-reveal'))$('btn-reveal').disabled=true;
     if($('host-lobby-date'))$('host-lobby-date').textContent=dayLabel(dd);
     if($('host-lobby-count')){const _n=(typeof Room!=='undefined'&&Room.data&&Room.data.players)?Object.keys(Room.data.players).length:0;$('host-lobby-count').textContent=_n;}
+    if($('host-responses'))$('host-responses').textContent='';
   },
   move(d){
     this.dayOffset+=d;
@@ -1026,6 +1029,13 @@ const RID_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function genCode(){let s='';for(let i=0;i<6;i++)s+=RID_ALPHABET[Math.floor(Math.random()*RID_ALPHABET.length)];return s;}
 function fbReady(){return !!(window.fb&&window.fb.ready&&window.fb.ready());}
 function onFbReady(cb){if(fbReady()){cb();return;}const h=()=>{if(fbReady()){window.removeEventListener('fb-ready',h);cb();}};window.addEventListener('fb-ready',h);}
+/* Stable anonymous labels: earliest joiner is "Player 1", next "Player 2", ... (same on every device) */
+function anonLabels(players){
+  const ids=Object.keys(players||{}).filter(k=>players[k]&&typeof players[k]==='object');
+  ids.sort((a,b)=>(((players[a].joinedAt)||0)-((players[b].joinedAt)||0))||(a<b?-1:a>b?1:0));
+  const map={};ids.forEach((pid,i)=>{map[pid]='Player '+(i+1);});
+  return map;
+}
 
 const Room={
   code:null,round:0,live:false,data:null,unsub:null,
@@ -1074,12 +1084,18 @@ const Room={
   renderHost(){
     const el=$('host-room');if(!el||!this.code)return;
     const players=(this.data&&this.data.players)||{};
-    const list=Object.keys(players).map(k=>({n:players[k]&&players[k].name,s:(players[k]&&players[k].score)||0})).filter(p=>p.n!==undefined&&p.n!==null).sort((a,b)=>b.s-a.s);
+    const labels=anonLabels(players);
+    const list=Object.keys(players).filter(k=>players[k]&&typeof players[k]==='object').map(k=>({pid:k,s:(players[k]&&players[k].score)||0})).sort((a,b)=>b.s-a.s);
     const n=list.length;
     if($('host-lobby-count'))$('host-lobby-count').textContent=n;
+    if($('host-responses')){
+      const liveQ=(typeof Host!=='undefined'&&(Host.phase==='live'||Host.phase==='reveal'));
+      if(liveQ){const ans=(this.data&&this.data.answers&&this.data.answers[this.round])||{};$('host-responses').textContent=Object.keys(ans).length+' of '+n+' answered';}
+      else $('host-responses').textContent='';
+    }
     let lb;
     if(n===0)lb='<div class="lb-empty">No one has joined yet — share the code or QR above.</div>';
-    else lb='<ol class="lb">'+list.slice(0,8).map((p,i)=>'<li><span class="lb__r">'+(i+1)+'</span><span class="lb__n">'+escapeHTML(p.n||'Player')+'</span><span class="lb__s">'+p.s+'</span></li>').join('')+'</ol>'+(n>8?'<div class="lb-more">+'+(n-8)+' more joined</div>':'');
+    else lb='<ol class="lb">'+list.slice(0,8).map((p,i)=>'<li><span class="lb__r">'+(i+1)+'</span><span class="lb__n">'+labels[p.pid]+'</span><span class="lb__s">'+p.s+'</span></li>').join('')+'</ol>'+(n>8?'<div class="lb-more">+'+(n-8)+' more joined</div>':'');
     el.innerHTML='<div class="roomcode-lab">Room code</div><div class="roomcode">'+this.code+'</div><div class="lb-head">Leaderboard · <b>'+n+'</b> joined</div>'+lb+'<button class="textbtn" id="room-end" style="margin-top:12px">End session for everyone</button>';
     const eb=$('room-end');if(eb)eb.addEventListener('click',()=>{if(confirm('End the live session for all players?'))this.end();});
   },
@@ -1097,12 +1113,11 @@ const Player={
     else{this.renderConnecting();onFbReady(()=>this.afterReady());setTimeout(()=>{if(!fbReady()&&!this.joined)this.renderOffline();},6000);}
   },
   afterReady(){if(!this.joined)this.renderNameForm();},
-  async join(name){
-    this.name=name;
+  async join(){
     const room=await window.fb.get('rooms/wrh/'+this.code);
     if(!room){this.renderError('Room '+this.code+' was not found. Check the code with the host and try again.');return;}
     this.pid='p_'+Math.random().toString(36).slice(2,10);
-    await window.fb.set('rooms/wrh/'+this.code+'/players/'+this.pid,{name:name,score:0,joinedAt:window.fb.ts()});
+    await window.fb.set('rooms/wrh/'+this.code+'/players/'+this.pid,{score:0,joinedAt:window.fb.ts()});
     window.fb.onDisconnectRemove('rooms/wrh/'+this.code+'/players/'+this.pid);
     this.joined=true;
     this.unsub=window.fb.listen('rooms/wrh/'+this.code,v=>this.onRoom(v));
@@ -1120,20 +1135,21 @@ const Player={
     const elapsed=window.fb.ts()-startedAt;
     const remaining=Math.max(0,QUESTION_DURATION_MS-elapsed);
     const speedRatio=Math.max(0,Math.min(1,remaining/QUESTION_DURATION_MS));
-    await window.fb.set('rooms/wrh/'+this.code+'/answers/'+this.round+'/'+this.pid,{answer:idx,letter:letter,elapsedMs:elapsed,speedRatio:speedRatio,name:this.name});
+    await window.fb.set('rooms/wrh/'+this.code+'/answers/'+this.round+'/'+this.pid,{answer:idx,letter:letter,elapsedMs:elapsed,speedRatio:speedRatio});
     this.render();
   },
   lbHTML(players){
-    const list=Object.keys(players).map(k=>({pid:k,n:players[k]&&players[k].name,s:(players[k]&&players[k].score)||0})).filter(p=>p.n!==undefined&&p.n!==null).sort((a,b)=>b.s-a.s);
+    const labels=anonLabels(players);
+    const list=Object.keys(players).filter(k=>players[k]&&typeof players[k]==='object').map(k=>({pid:k,s:(players[k]&&players[k].score)||0})).sort((a,b)=>b.s-a.s);
     if(!list.length)return '';
-    return '<div class="lb-head">Leaderboard</div><ol class="lb">'+list.slice(0,10).map((p,i)=>'<li'+(p.pid===this.pid?' class="me"':'')+'><span class="lb__r">'+(i+1)+'</span><span class="lb__n">'+escapeHTML(p.n||'Player')+(p.pid===this.pid?' (you)':'')+'</span><span class="lb__s">'+p.s+'</span></li>').join('')+'</ol>';
+    return '<div class="lb-head">Leaderboard</div><ol class="lb">'+list.slice(0,10).map((p,i)=>'<li'+(p.pid===this.pid?' class="me"':'')+'><span class="lb__r">'+(i+1)+'</span><span class="lb__n">'+labels[p.pid]+(p.pid===this.pid?' (you)':'')+'</span><span class="lb__s">'+p.s+'</span></li>').join('')+'</ol>';
   },
   renderNameForm(){
     const el=$('join-root');if(!el)return;
-    el.innerHTML='<div class="card joincard"><div class="joinhead"><span class="dot-live"></span> Live team quiz</div><h2 style="margin:.3em 0">Join room '+escapeHTML(this.code)+'</h2><p class="sub">Enter a name to appear on the leaderboard, then answer on your phone as the host runs each question.</p><input id="join-name" class="joininput" placeholder="Your name" maxlength="32" autocomplete="name"><button class="btn btn--primary" id="join-go" style="min-width:180px">Join quiz</button><div id="join-msg" class="joinmsg"></div></div>';
-    const go=$('join-go'),inp=$('join-name');
-    const submit=()=>{const nm=(inp.value||'').trim();if(!nm){$('join-msg').textContent='Please enter a name.';return;}go.disabled=true;go.textContent='Joining…';this.join(nm).catch(e=>{go.disabled=false;go.textContent='Join quiz';$('join-msg').textContent='Could not join: '+((e&&e.message)||e);});};
-    go.addEventListener('click',submit);inp.addEventListener('keydown',e=>{if(e.key==='Enter')submit();});try{inp.focus();}catch(e){}
+    el.innerHTML='<div class="card joincard"><div class="joinhead"><span class="dot-live"></span> Live team quiz</div><h2 style="margin:.3em 0">Join room '+escapeHTML(this.code)+'</h2><p class="sub">You will join anonymously — the leaderboard shows everyone as "Player 1", "Player 2", and so on. Just answer on your phone as the host runs each question.</p><button class="btn btn--primary" id="join-go" style="min-width:200px">Join anonymously</button><div id="join-msg" class="joinmsg"></div></div>';
+    const go=$('join-go');
+    const submit=()=>{go.disabled=true;go.textContent='Joining…';this.join().catch(e=>{go.disabled=false;go.textContent='Join anonymously';$('join-msg').textContent='Could not join: '+((e&&e.message)||e);});};
+    go.addEventListener('click',submit);
   },
   render(){
     const el=$('join-root');if(!el||!this.data)return;
