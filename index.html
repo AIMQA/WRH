@@ -146,6 +146,16 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 .opt__tick{flex:none;align-self:center;font-weight:700;font-size:18px;opacity:0}
 .opt--correct .opt__tick{opacity:1;color:var(--nhs-green)}
 .opt--wrong .opt__tick{opacity:1;color:var(--nhs-red)}
+/* Response distribution — reveal participants' answers before the correct one */
+.opt--dist{position:relative;overflow:hidden}
+.opt__bar{position:absolute;left:0;top:0;bottom:0;width:0;background:rgba(0,114,206,.13);z-index:0;transition:width .55s cubic-bezier(.33,1,.68,1)}
+.opt--dist>.opt__k,.opt--dist>.opt__t,.opt--dist>.opt__count,.opt--dist>.opt__tick{position:relative;z-index:1}
+.opt__count{flex:none;align-self:center;font:700 12.5px var(--mono);color:var(--ink-soft);white-space:nowrap;margin-left:8px}
+.opt--correct .opt__bar{background:rgba(0,127,59,.17)}
+.opt--correct .opt__count{color:var(--nhs-green)}
+.opt--wrong .opt__bar{background:rgba(218,41,28,.13)}
+.opt--wrong .opt__count{color:var(--nhs-red)}
+.opt--you{box-shadow:inset 0 0 0 2px var(--nhs-bright)}
 
 /* explanation reveal */
 .explain{margin-top:18px;border-left:4px solid var(--nhs-green);background:#F3F9F5;border-radius:0 10px 10px 0;
@@ -510,13 +520,14 @@ select{font-family:var(--font);font-size:13.5px;padding:9px 11px;border:1px soli
             Start 60s
           </button>
           <div class="ctrls__row">
-            <button class="btn btn--reveal" id="btn-reveal">Reveal now</button>
-            <button class="btn btn--ghost" id="btn-reset">Reset timer</button>
+            <button class="btn btn--ghost" id="btn-responses">Show responses</button>
+            <button class="btn btn--reveal" id="btn-reveal">Reveal answer</button>
           </div>
           <div class="ctrls__row">
             <button class="btn btn--ghost" id="btn-prev">← Yesterday</button>
             <button class="btn btn--primary" id="btn-next">Tomorrow →</button>
           </div>
+          <button class="btn btn--ghost btn--wide" id="btn-reset" style="font-size:13px;padding:9px">Reset timer</button>
         </div>
 
         <div class="card sidecard">
@@ -754,6 +765,7 @@ const Host={
   build(){
     $('btn-start').addEventListener('click',()=>{if(this.phase==='lobby')this.startQuestion();else this.toggleTimer();});
     $('btn-reveal').addEventListener('click',()=>this.reveal());
+    const brs=$('btn-responses');if(brs)brs.addEventListener('click',()=>this.showResponses());
     $('btn-reset').addEventListener('click',()=>this.resetTimer());
     $('btn-next').addEventListener('click',()=>this.move(1));
     $('btn-prev').addEventListener('click',()=>this.move(-1));
@@ -768,6 +780,7 @@ const Host={
     this.phase='live';
     const hg=$('hostgrid');if(hg)hg.classList.remove('lobby');
     if($('btn-reveal'))$('btn-reveal').disabled=false;
+    if($('btn-responses'))$('btn-responses').disabled=false;
     hostQR();
     this.startTimer();
   },
@@ -801,6 +814,7 @@ const Host={
     this.phase='lobby';
     const hg=$('hostgrid');if(hg)hg.classList.add('lobby');
     if($('btn-reveal'))$('btn-reveal').disabled=true;
+    if($('btn-responses'))$('btn-responses').disabled=true;
     if($('lobby-day-date'))$('lobby-day-date').textContent=dayLabel(dd);
     if($('lobby-day-num'))$('lobby-day-num').textContent=dayOfYear(dd);
     if($('host-lobby-count')){const _n=(typeof Room!=='undefined'&&Room.data&&Room.data.players)?Object.keys(Room.data.players).length:0;$('host-lobby-count').textContent=_n;}
@@ -832,7 +846,7 @@ const Host={
     this.tid=setInterval(()=>{
       this.left--;this.updateRing();
       $('monitor-sub').textContent=this.left+' seconds left';
-      if(this.left<=0){clearInterval(this.tid);this.tid=null;this.running=false;this.reveal(true);}
+      if(this.left<=0){clearInterval(this.tid);this.tid=null;this.running=false;this.showResponses(true);}
     },1000);
   },
   pauseTimer(){
@@ -855,21 +869,46 @@ const Host={
     if(!silent)$('monitor-sub').textContent='Press Start to begin';
     else $('monitor-sub').textContent='Press Start to begin';
   },
+  showResponses(timesUp){
+    if(this.phase!=='live')return;
+    this.phase='responses';
+    if(this.tid){clearInterval(this.tid);this.tid=null;}
+    this.running=false;
+    $('monitor').classList.remove('run');
+    this.paintDistribution(false);
+    $('btn-start').disabled=true;
+    if($('btn-responses'))$('btn-responses').disabled=true;
+    $('monitor-sub').textContent=timesUp?"Time's up — here's how the room answered":'Responses in — reveal the answer when ready';
+    if(typeof Room!=='undefined'&&Room.code)Room.showResponses(this.order[this.idx]);
+  },
+  paintDistribution(showCorrect){
+    const q=this.order[this.idx];if(!q)return;
+    const ans=(typeof Room!=='undefined'&&Room.data&&Room.data.answers)?Room.data.answers[Room.round]:null;
+    const info=tallyAnswers(ans),t=info.t,total=info.total;
+    document.querySelectorAll('#host-opts .opt').forEach(o=>{
+      const L=o.dataset.k,c=t[L]||0,pct=total?Math.round(c/total*100):0;
+      o.classList.add('opt--dist');
+      let bar=o.querySelector('.opt__bar');if(!bar){bar=document.createElement('span');bar.className='opt__bar';o.insertBefore(bar,o.firstChild);}
+      bar.style.width=pct+'%';
+      let cnt=o.querySelector('.opt__count');if(!cnt){cnt=document.createElement('span');cnt.className='opt__count';o.insertBefore(cnt,o.querySelector('.opt__tick'));}
+      cnt.textContent=total?(c+' · '+pct+'%'):c;
+      if(showCorrect&&L===q.x)o.classList.add('opt--correct');
+    });
+  },
   reveal(fromTimer){
     if(this.revealed||this.phase==='lobby')return;
     this.revealed=true;this.phase='reveal';
     if(this.tid){clearInterval(this.tid);this.tid=null;}
     this.running=false;
-    const q=this.order[this.idx];
-    document.querySelectorAll('#host-opts .opt').forEach(o=>{
-      o.style.pointerEvents='none';
-      if(o.dataset.k===q.x)o.classList.add('opt--correct');
-    });
+    document.querySelectorAll('#host-opts .opt').forEach(o=>{o.style.pointerEvents='none';});
+    this.paintDistribution(true);
     $('host-explain').classList.add('show');
     const m=$('monitor');m.classList.remove('run');m.classList.add('done');
     $('ring-num').textContent='0';
     $('ring-bar').style.strokeDashoffset=RING_CIRC;
     $('btn-start').disabled=true;
+    if($('btn-responses'))$('btn-responses').disabled=true;
+    if($('btn-reveal'))$('btn-reveal').disabled=true;
     $('monitor-sub').textContent=fromTimer?"Time's up — answer shown":'Answer revealed';
   }
 };
@@ -878,6 +917,7 @@ document.addEventListener('keydown',e=>{
   if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;
   if(e.code==='Space'){e.preventDefault();if(Host.phase==='lobby')Host.startQuestion();else Host.toggleTimer();}
   else if(e.key==='r'||e.key==='R'){Host.reveal();}
+  else if(e.key==='a'||e.key==='A'){Host.showResponses();}
   else if(e.key==='ArrowRight'){Host.move(1);}
   else if(e.key==='ArrowLeft'){Host.move(-1);}
 });
@@ -1077,6 +1117,7 @@ function anonLabels(players){
   const map={};ids.forEach((pid,i)=>{map[pid]='Player '+(i+1);});
   return map;
 }
+function tallyAnswers(ans){const t={A:0,B:0,C:0,D:0};let total=0;const a=ans||{};Object.keys(a).forEach(pid=>{const L=a[pid]&&a[pid].letter;if(L&&t[L]!==undefined){t[L]++;total++;}});return{t:t,total:total};}
 
 const Room={
   code:null,round:0,live:false,data:null,unsub:null,
@@ -1107,6 +1148,10 @@ const Room={
     if(!this.code||!q||this.live)return;
     this.live=true;
     window.fb.update('rooms/wrh/'+this.code,{state:'question',qid:q.i,startedAt:window.fb.ts()});
+  },
+  showResponses(q){ /* reveal the participants' answers (distribution) — not the correct one yet */
+    if(!this.code||!q)return;
+    window.fb.update('rooms/wrh/'+this.code,{state:'responses'});
   },
   async onHostReveal(q){ /* score everyone's answer for the live round, then reveal */
     if(!this.code||!q)return;
@@ -1208,9 +1253,17 @@ const Player={
       if(!locked)el.querySelectorAll('.joinopt').forEach(b=>{b.addEventListener('click',()=>{el.querySelectorAll('.joinopt').forEach(x=>{x.disabled=true;x.classList.toggle('opt--chosen',x===b);});this.submit(b.dataset.k,+b.dataset.i);});});
       return;
     }
-    if(d.state==='reveal'){
+    if(d.state==='responses'){
+      const info=tallyAnswers(d.answers?d.answers[this.round]:null),t=info.t,total=info.total;
       const myAns=(d.answers&&d.answers[this.round]&&d.answers[this.round][this.pid])||null;
-      let opts='';q.o.forEach((t,i)=>{const L=LETTERS[i];let cls='opt';if(L===q.x)cls+=' opt--correct';else if(myAns&&myAns.letter===L)cls+=' opt--wrong';opts+='<div class="'+cls+'"><span class="opt__k">'+L+'</span><span class="opt__t">'+escapeHTML(t)+'</span><span class="opt__tick">✓</span></div>';});
+      let opts='';q.o.forEach((tx,i)=>{const L=LETTERS[i],c=t[L]||0,pct=total?Math.round(c/total*100):0;let cls='opt opt--dist';if(myAns&&myAns.letter===L)cls+=' opt--you';opts+='<div class="'+cls+'"><span class="opt__bar" style="width:'+pct+'%"></span><span class="opt__k">'+L+'</span><span class="opt__t">'+escapeHTML(tx)+'</span><span class="opt__count">'+(total?(c+' · '+pct+'%'):c)+'</span></div>';});
+      el.innerHTML='<div class="card joincard">'+head+'<div class="opts">'+opts+'</div><div class="joinstatus">Here is how the room answered — waiting for the host to reveal the correct answer…</div>'+lb+'</div>';
+      return;
+    }
+    if(d.state==='reveal'){
+      const info=tallyAnswers(d.answers?d.answers[this.round]:null),t=info.t,total=info.total;
+      const myAns=(d.answers&&d.answers[this.round]&&d.answers[this.round][this.pid])||null;
+      let opts='';q.o.forEach((tx,i)=>{const L=LETTERS[i],c=t[L]||0,pct=total?Math.round(c/total*100):0;let cls='opt opt--dist';if(L===q.x)cls+=' opt--correct';else if(myAns&&myAns.letter===L)cls+=' opt--wrong';opts+='<div class="'+cls+'"><span class="opt__bar" style="width:'+pct+'%"></span><span class="opt__k">'+L+'</span><span class="opt__t">'+escapeHTML(tx)+'</span><span class="opt__count">'+(total?(c+' · '+pct+'%'):c)+'</span><span class="opt__tick">✓</span></div>';});
       const verdict=myAns?(myAns.letter===q.x?'<div class="feedback feedback--right">✓ Correct</div>':'<div class="feedback feedback--wrong">✗ You answered '+myAns.letter+' — correct is '+q.x+'</div>'):'<div class="feedback">No answer recorded.</div>';
       el.innerHTML='<div class="card joincard">'+head+'<div class="opts">'+opts+'</div>'+verdict+'<div class="explain show"><div class="explain__lab"><span class="ans">'+q.x+'</span> Correct answer &amp; teaching point</div><p>'+escapeHTML(q.e)+'</p><div class="whywrong">'+buildWhy(q)+'</div></div>'+lb+'</div>';
       return;
